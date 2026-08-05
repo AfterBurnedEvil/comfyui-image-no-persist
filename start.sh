@@ -9,6 +9,10 @@ readonly FILEBROWSER_DATABASE="/run/filebrowser.db"
 # ComfyUI Manager while the disposable Pod is running.
 export PIP_CONSTRAINT="/opt/comfyui-runtime-constraints.txt"
 
+# Default password for File Browser (port 8080) and ComfyUI proxy (port 8189).
+# Override at runtime by setting WEBUI_PASSWORD in the Pod environment.
+: "${WEBUI_PASSWORD:=anything12345}"
+
 comfyui_pid=""
 filebrowser_pid=""
 nginx_pid=""
@@ -100,6 +104,60 @@ NGINX_EOF
     nginx -c /run/nginx-comfyui.conf &
     nginx_pid=$!
     log "nginx ComfyUI proxy (basic-auth) is listening on port 8189."
+fi
+
+# ---------------------------------------------------------------------------
+# Pre-fetch MiniMax-H3 model weights in the background so ComfyUI can start
+# immediately. Each file is skipped when it already exists on disk.
+# Set SKIP_MODEL_DOWNLOADS=1 to disable entirely.
+# ---------------------------------------------------------------------------
+readonly HF_BASE="https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main"
+declare -A MODEL_MAP=(
+    ["${COMFYUI_DIR}/models/vae/minimax_h3_audio_vae_fp32.safetensors"]="${HF_BASE}/vae/minimax_h3_audio_vae_fp32.safetensors"
+    ["${COMFYUI_DIR}/models/vae/minimax_h3_video_vae_fp16.safetensors"]="${HF_BASE}/vae/minimax_h3_video_vae_fp16.safetensors"
+    ["${COMFYUI_DIR}/models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors"]="${HF_BASE}/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+    ["${COMFYUI_DIR}/models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"]="${HF_BASE}/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+)
+
+if [[ "${SKIP_MODEL_DOWNLOADS:-0}" != "1" ]]; then
+    (
+        failed=0
+        total=${#MODEL_MAP[@]}
+        done_count=0
+
+        for dest in "${!MODEL_MAP[@]}"; do
+            url="${MODEL_MAP[$dest]}"
+            fname="$(basename "$dest")"
+            if [[ -f "$dest" ]]; then
+                log "[models] SKIP  ${fname} (already exists)"
+                (( done_count++ )) || true
+                continue
+            fi
+            mkdir -p "$(dirname "$dest")"
+            log "[models] START ${fname}"
+            if aria2c \
+                --file-allocation=none \
+                --continue=true \
+                --max-connection-per-server=4 \
+                --split=4 \
+                --quiet=true \
+                --out="$dest" \
+                "$url"; then
+                log "[models] DONE  ${fname}"
+            else
+                log "[models] FAIL  ${fname} (aria2c exited $?)"
+                (( failed++ )) || true
+            fi
+            (( done_count++ )) || true
+        done
+
+        if (( failed == 0 )); then
+            log "[models] All ${total} model file(s) ready."
+        else
+            log "[models] ${failed}/${total} model file(s) failed to download."
+        fi
+    ) &
+    log "Model downloads started in background (set SKIP_MODEL_DOWNLOADS=1 to skip)."
 fi
 
 extra_args=()
