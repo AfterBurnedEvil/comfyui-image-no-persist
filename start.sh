@@ -153,6 +153,7 @@ if [[ -n "${WEBUI_PASSWORD:-}" ]]; then
     cat > /run/nginx-comfyui.conf <<'NGINX_EOF'
 events {}
 http {
+    client_max_body_size 0;
     server {
         listen 8189;
         location / {
