@@ -13,6 +13,15 @@ export PIP_CONSTRAINT="/opt/comfyui-runtime-constraints.txt"
 # Override at runtime by setting WEBUI_PASSWORD in the Pod environment.
 : "${WEBUI_PASSWORD:=anything12345}"
 
+# ---------------------------------------------------------------------------
+# Persistence toggle.
+#   ENABLE_PERSISTENCE=1  – symlink key ComfyUI dirs to a RunPod network volume
+#   ENABLE_PERSISTENCE=0  – ephemeral mode (default); nothing is written to /workspace
+#   VOLUME_DIR            – mount-point of the RunPod network volume (default: /workspace)
+# ---------------------------------------------------------------------------
+: "${ENABLE_PERSISTENCE:=0}"
+: "${VOLUME_DIR:=/workspace}"
+
 comfyui_pid=""
 filebrowser_pid=""
 nginx_pid=""
@@ -53,6 +62,41 @@ mkdir -p /run/sshd
 ssh-keygen -A
 /usr/sbin/sshd
 log "SSH is listening on port 22."
+
+# ---------------------------------------------------------------------------
+# Volume persistence: symlink ComfyUI data dirs to the network volume so that
+# models, outputs, and user-installed nodes survive pod restarts.
+# ---------------------------------------------------------------------------
+if [[ "${ENABLE_PERSISTENCE}" == "1" ]]; then
+    log "Persistence enabled – linking ComfyUI dirs to ${VOLUME_DIR}/ComfyUI"
+    # Directories to persist: <source inside image> mapped to <name on volume>
+    declare -A PERSIST_DIRS=(
+        ["${COMFYUI_DIR}/models"]="models"
+        ["${COMFYUI_DIR}/custom_nodes"]="custom_nodes"
+        ["${COMFYUI_DIR}/output"]="output"
+        ["${COMFYUI_DIR}/input"]="input"
+        ["${COMFYUI_DIR}/user"]="user"
+    )
+    for src in "${!PERSIST_DIRS[@]}"; do
+        vol="${VOLUME_DIR}/ComfyUI/${PERSIST_DIRS[$src]}"
+        if [[ -L "$src" ]]; then
+            # Already a symlink from a previous run – nothing to do.
+            log "  [persist] already linked: ${src} -> ${vol}"
+            continue
+        fi
+        # First boot: copy baked-in content to the volume then replace with symlink.
+        mkdir -p "$vol"
+        if [[ -d "$src" ]]; then
+            cp -a "${src}/.". "$vol/" 2>/dev/null || true
+            rm -rf "$src"
+        fi
+        ln -s "$vol" "$src"
+        log "  [persist] linked: ${src} -> ${vol}"
+    done
+    log "Persistence setup complete."
+else
+    log "Persistence disabled (set ENABLE_PERSISTENCE=1 to enable)."
+fi
 
 # The database is intentionally ephemeral. Restrict the browser root to the
 # disposable ComfyUI tree, including its models, custom_nodes, input and output.
