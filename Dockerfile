@@ -33,6 +33,16 @@ RUN git clone --depth 1 https://github.com/Comfy-Org/ComfyUI.git /opt/ComfyUI \
     fi \
     && rm -rf /opt/comfyui-baked
 
+# ComfyUI is exposed remotely through RunPod's per-Pod proxy but is operated by
+# one user. Current Manager releases require personal_cloud mode for registered
+# install/update actions when ComfyUI listens on a non-loopback address.
+RUN install -d -m 0755 /opt/ComfyUI/user/__manager \
+    && printf '%s\n' \
+        '[default]' \
+        'security_level = normal' \
+        'network_mode = personal_cloud' \
+        > /opt/ComfyUI/user/__manager/config.ini
+
 COPY --chmod=755 start.sh /usr/local/bin/start-comfy-container
 COPY --chmod=755 restart-comfy.sh /usr/local/bin/restart-comfy
 

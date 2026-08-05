@@ -16,10 +16,12 @@ copy. ComfyUI runs directly from `/opt/ComfyUI`.
 | File Browser | `8080/http` | Browses the disposable `/opt/ComfyUI` tree |
 | SSH | `22/tcp` | Uses RunPod's `PUBLIC_KEY` environment variable |
 
-The supported built-in ComfyUI Manager is enabled. It can install missing
-custom nodes, their Python requirements, and supported models during the Pod's
-lifetime. Git, Git LFS, wget, curl, aria2, ffmpeg, C/C++ build tools, CMake,
-Ninja, and Python development headers are available for runtime node installs.
+The supported built-in ComfyUI Manager is enabled and configured for a
+single-user cloud instance (`network_mode = personal_cloud`,
+`security_level = normal`). It can install registered missing custom nodes,
+their Python requirements, and supported models during the Pod's lifetime.
+Git, Git LFS, wget, curl, aria2, ffmpeg, C/C++ build tools, CMake, Ninja, and
+Python development headers are available for runtime node installs.
 
 No checkpoints, diffusion models, LoRAs, VAEs, text encoders, ControlNets,
 upscalers, GGUF files, or other generation weights are added by this repository.
