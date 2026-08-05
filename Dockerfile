@@ -6,9 +6,11 @@ ARG DEBIAN_FRONTEND=noninteractive
 # tools commonly needed when ComfyUI Manager installs custom nodes at runtime.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        apache2-utils \
         aria2 \
         cmake \
         git-lfs \
+        nginx \
         ninja-build \
         pkg-config \
     && git lfs install --system \
@@ -43,12 +45,35 @@ RUN install -d -m 0755 /opt/ComfyUI/user/__manager \
         'network_mode = personal_cloud' \
         > /opt/ComfyUI/user/__manager/config.ini
 
+# Pre-install custom nodes baked into the image.
+#   • Nvidia_RTX_Nodes_ComfyUI  – RTX Video Super Resolution & related nodes
+#   • ComfyUI-Workflow-Models-Downloader – HuggingFace / model download helper
+#   • ComfyUI-KJNodes            – KJ utility node pack
+RUN git clone --depth 1 \
+        https://github.com/Comfy-Org/Nvidia_RTX_Nodes_ComfyUI.git \
+        /opt/ComfyUI/custom_nodes/Nvidia_RTX_Nodes_ComfyUI \
+    && git clone --depth 1 \
+        https://github.com/slahiri/ComfyUI-Workflow-Models-Downloader.git \
+        /opt/ComfyUI/custom_nodes/ComfyUI-Workflow-Models-Downloader \
+    && git clone --depth 1 \
+        https://github.com/kijai/ComfyUI-KJNodes.git \
+        /opt/ComfyUI/custom_nodes/ComfyUI-KJNodes \
+    && python3 -m pip install --no-cache-dir \
+        --extra-index-url https://pypi.nvidia.com \
+        --requirement /opt/ComfyUI/custom_nodes/Nvidia_RTX_Nodes_ComfyUI/requirements.txt \
+    && python3 -m pip install --no-cache-dir \
+        --constraint /opt/comfyui-runtime-constraints.txt \
+        --requirement /opt/ComfyUI/custom_nodes/ComfyUI-Workflow-Models-Downloader/requirements.txt \
+    && python3 -m pip install --no-cache-dir \
+        --constraint /opt/comfyui-runtime-constraints.txt \
+        --requirement /opt/ComfyUI/custom_nodes/ComfyUI-KJNodes/requirements.txt
+
 COPY --chmod=755 start.sh /usr/local/bin/start-comfy-container
 COPY --chmod=755 restart-comfy.sh /usr/local/bin/restart-comfy
 
 WORKDIR /opt/ComfyUI
 
-EXPOSE 22 8080 8188
+EXPOSE 22 8080 8188 8189
 
 # Deliberately replace the base image's /start.sh so nothing is copied to
 # /workspace. ComfyUI runs directly from /opt/ComfyUI in the image layer.

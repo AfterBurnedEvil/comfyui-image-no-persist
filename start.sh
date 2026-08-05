@@ -11,6 +11,7 @@ export PIP_CONSTRAINT="/opt/comfyui-runtime-constraints.txt"
 
 comfyui_pid=""
 filebrowser_pid=""
+nginx_pid=""
 stopping=0
 
 log() {
@@ -26,6 +27,9 @@ stop_container() {
     fi
     if [[ -n "${filebrowser_pid}" ]] && kill -0 "${filebrowser_pid}" 2>/dev/null; then
         kill -TERM "${filebrowser_pid}" 2>/dev/null || true
+    fi
+    if [[ -n "${nginx_pid}" ]] && kill -0 "${nginx_pid}" 2>/dev/null; then
+        kill -TERM "${nginx_pid}" 2>/dev/null || true
     fi
     if [[ -f /run/sshd.pid ]]; then
         kill -TERM "$(cat /run/sshd.pid)" 2>/dev/null || true
@@ -48,14 +52,55 @@ log "SSH is listening on port 22."
 
 # The database is intentionally ephemeral. Restrict the browser root to the
 # disposable ComfyUI tree, including its models, custom_nodes, input and output.
-filebrowser \
-    --database "${FILEBROWSER_DATABASE}" \
-    --root "${COMFYUI_DIR}" \
-    --address 0.0.0.0 \
-    --port 8080 \
-    --noauth &
+if [[ -n "${WEBUI_PASSWORD:-}" ]]; then
+    # Initialise a fresh File Browser database with admin credentials.
+    filebrowser config init --database "${FILEBROWSER_DATABASE}"
+    filebrowser users add admin "${WEBUI_PASSWORD}" \
+        --database "${FILEBROWSER_DATABASE}" \
+        --perm.admin
+    filebrowser \
+        --database "${FILEBROWSER_DATABASE}" \
+        --root "${COMFYUI_DIR}" \
+        --address 0.0.0.0 \
+        --port 8080 &
+else
+    filebrowser \
+        --database "${FILEBROWSER_DATABASE}" \
+        --root "${COMFYUI_DIR}" \
+        --address 0.0.0.0 \
+        --port 8080 \
+        --noauth &
+fi
 filebrowser_pid=$!
 log "File Browser is listening on port 8080."
+
+# When a password is set, expose ComfyUI through an nginx basic-auth proxy on
+# port 8189. ComfyUI itself stays on 8188 (internal only in that mode).
+if [[ -n "${WEBUI_PASSWORD:-}" ]]; then
+    htpasswd -bc /run/comfyui.htpasswd admin "${WEBUI_PASSWORD}"
+    cat > /run/nginx-comfyui.conf <<'NGINX_EOF'
+events {}
+http {
+    server {
+        listen 8189;
+        location / {
+            auth_basic            "ComfyUI";
+            auth_basic_user_file  /run/comfyui.htpasswd;
+
+            proxy_pass            http://127.0.0.1:8188;
+            proxy_http_version    1.1;
+            proxy_set_header      Upgrade    $http_upgrade;
+            proxy_set_header      Connection "upgrade";
+            proxy_set_header      Host       $host;
+            proxy_read_timeout    3600s;
+        }
+    }
+}
+NGINX_EOF
+    nginx -c /run/nginx-comfyui.conf &
+    nginx_pid=$!
+    log "nginx ComfyUI proxy (basic-auth) is listening on port 8189."
+fi
 
 extra_args=()
 if [[ -n "${COMFYUI_EXTRA_ARGS:-}" ]]; then
