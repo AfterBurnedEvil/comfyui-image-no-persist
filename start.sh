@@ -69,10 +69,11 @@ log "SSH is listening on port 22."
 # ---------------------------------------------------------------------------
 if [[ "${ENABLE_PERSISTENCE}" == "1" ]]; then
     log "Persistence enabled – linking ComfyUI dirs to ${VOLUME_DIR}/ComfyUI"
-    # Directories to persist: <source inside image> mapped to <name on volume>
+    # Directories to persist on the volume. custom_nodes is NOT seeded from the
+    # image on first boot – the baked-in nodes are always present in the image
+    # layer. Only nodes added at runtime (via ComfyUI Manager) live on the volume.
     declare -A PERSIST_DIRS=(
         ["${COMFYUI_DIR}/models"]="models"
-        ["${COMFYUI_DIR}/custom_nodes"]="custom_nodes"
         ["${COMFYUI_DIR}/output"]="output"
         ["${COMFYUI_DIR}/input"]="input"
         ["${COMFYUI_DIR}/user"]="user"
@@ -84,18 +85,41 @@ if [[ "${ENABLE_PERSISTENCE}" == "1" ]]; then
             log "  [persist] already linked: ${src} -> ${vol}"
             continue
         fi
-        # First boot: copy baked-in content to the volume then replace with symlink.
+        # First boot: seed the volume with the image content, then symlink.
         mkdir -p "$vol"
         if [[ -d "$src" ]]; then
-            cp -a "${src}/.". "$vol/" 2>/dev/null || true
+            cp -a "${src}/" "$vol/" 2>/dev/null || true
             rm -rf "$src"
         fi
         ln -s "$vol" "$src"
         log "  [persist] linked: ${src} -> ${vol}"
     done
+
+    # custom_nodes: merge runtime-installed nodes from the volume back onto the
+    # image's baked-in nodes. On first boot the volume dir is empty so this is a
+    # no-op. After Manager installs something, those nodes survive here.
+    vol_cn="${VOLUME_DIR}/ComfyUI/custom_nodes"
+    mkdir -p "$vol_cn"
+    if [[ -n "$(ls -A "$vol_cn" 2>/dev/null)" ]]; then
+        log "  [persist] restoring runtime custom_nodes from volume..."
+        cp -a "${vol_cn}/." "${COMFYUI_DIR}/custom_nodes/" 2>/dev/null || true
+    fi
     log "Persistence setup complete."
 else
     log "Persistence disabled (set ENABLE_PERSISTENCE=1 to enable)."
+fi
+
+# Ensure the Manager config exists in whatever location user/ now resolves to
+# (image layer for ephemeral pods, or network volume for persistent ones).
+# Writing it here at runtime survives volume re-use where the file was absent.
+install -d -m 0755 "${COMFYUI_DIR}/user/__manager"
+if [[ ! -f "${COMFYUI_DIR}/user/__manager/config.ini" ]]; then
+    printf '%s\n' \
+        '[default]' \
+        'security_level = normal' \
+        'network_mode = personal_cloud' \
+        > "${COMFYUI_DIR}/user/__manager/config.ini"
+    log "Wrote ComfyUI Manager config.ini"
 fi
 
 # The database is intentionally ephemeral. Restrict the browser root to the
@@ -185,7 +209,8 @@ if [[ "${SKIP_MODEL_DOWNLOADS:-0}" != "1" ]]; then
                 --max-connection-per-server=4 \
                 --split=4 \
                 --quiet=true \
-                --out="$dest" \
+                --dir="$(dirname "$dest")" \
+                --out="$(basename "$dest")" \
                 "$url"; then
                 log "[models] DONE  ${fname}"
             else
